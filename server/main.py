@@ -120,6 +120,24 @@ class CreatePurchaseOrderRequest(BaseModel):
     expected_delivery_date: str
     notes: Optional[str] = None
 
+class RestockingOrder(BaseModel):
+    id: str
+    order_number: str
+    items: List[dict]
+    order_date: str
+    expected_delivery: str
+    lead_time_days: int
+    total_value: float
+    status: str
+
+class CreateRestockingOrderRequest(BaseModel):
+    items: List[dict]
+    lead_time_days: int
+    total_value: float
+
+# In-memory restocking orders list
+restocking_orders: list = []
+
 # API endpoints
 @app.get("/")
 def root():
@@ -178,6 +196,37 @@ def get_backlog():
         item_dict["has_purchase_order"] = has_po
         result.append(item_dict)
     return result
+
+@app.post("/api/purchase-orders", response_model=PurchaseOrder)
+def create_purchase_order(request: CreatePurchaseOrderRequest):
+    """Create a new purchase order for a backlog item"""
+    backlog_item = next((b for b in backlog_items if b["id"] == request.backlog_item_id), None)
+    if not backlog_item:
+        raise HTTPException(status_code=404, detail="Backlog item not found")
+
+    from datetime import date
+    po_id = f"PO-{len(purchase_orders) + 1:04d}"
+    new_po = {
+        "id": po_id,
+        "backlog_item_id": request.backlog_item_id,
+        "supplier_name": request.supplier_name,
+        "quantity": request.quantity,
+        "unit_cost": request.unit_cost,
+        "expected_delivery_date": request.expected_delivery_date,
+        "status": "pending",
+        "created_date": date.today().isoformat(),
+        "notes": request.notes,
+    }
+    purchase_orders.append(new_po)
+    return new_po
+
+@app.get("/api/purchase-orders/{backlog_item_id}", response_model=PurchaseOrder)
+def get_purchase_order(backlog_item_id: str):
+    """Get purchase order for a specific backlog item"""
+    po = next((p for p in purchase_orders if p["backlog_item_id"] == backlog_item_id), None)
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+    return po
 
 @app.get("/api/dashboard/summary")
 def get_dashboard_summary(
@@ -303,6 +352,31 @@ def get_monthly_trends():
     result = list(months.values())
     result.sort(key=lambda x: x['month'])
     return result
+
+@app.post("/api/restocking-orders", response_model=RestockingOrder, status_code=201)
+def create_restocking_order(request: CreateRestockingOrderRequest):
+    """Create a new restocking order from budget recommendations"""
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    delivery = now + timedelta(days=request.lead_time_days)
+    order_id = str(len(restocking_orders) + 1)
+    order = {
+        "id": order_id,
+        "order_number": f"RST-{now.strftime('%Y')}-{order_id.zfill(4)}",
+        "items": request.items,
+        "order_date": now.isoformat(),
+        "expected_delivery": delivery.isoformat(),
+        "lead_time_days": request.lead_time_days,
+        "total_value": request.total_value,
+        "status": "Processing"
+    }
+    restocking_orders.append(order)
+    return order
+
+@app.get("/api/restocking-orders", response_model=List[RestockingOrder])
+def get_restocking_orders():
+    """Get all submitted restocking orders"""
+    return restocking_orders
 
 if __name__ == "__main__":
     import uvicorn
